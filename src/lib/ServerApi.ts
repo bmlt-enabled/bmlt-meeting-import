@@ -71,6 +71,26 @@ class ApiClient extends RootServerApi {
     return this._token.expiresAt < currentTime;
   }
 
+  updateServerUrl(baseUrl: string): void {
+    const normalizedUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+    const currentUrl = this.configuration.basePath || '';
+    
+    // Only clear token if actually switching to a different server
+    if (currentUrl !== normalizedUrl) {
+      console.log('Switching servers from', currentUrl, 'to', normalizedUrl);
+      this.token = null;
+    }
+    
+    this.configuration = new Configuration({
+      basePath: normalizedUrl,
+      accessToken: () => this.authorizationHeader ?? ''
+    });
+  }
+
+  get currentServerUrl(): string {
+    return this.configuration.basePath || '';
+  }
+
   async getLaravelLog(): Promise<Blob> {
     return this.getLaravelLogRaw().then((response) => response.value());
   }
@@ -165,6 +185,14 @@ class ApiClientWrapper {
 
   get isTokenExpired(): boolean {
     return this.api.isTokenExpired;
+  }
+
+  updateServerUrl(baseUrl: string): void {
+    this.api.updateServerUrl(baseUrl);
+  }
+
+  get currentServerUrl(): string {
+    return this.api.currentServerUrl;
   }
 
   async login(username: string, password: string): Promise<Token> {

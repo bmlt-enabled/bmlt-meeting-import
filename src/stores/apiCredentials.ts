@@ -1,4 +1,4 @@
-import { get, writable } from 'svelte/store';
+import { get, writable, derived } from 'svelte/store';
 import type { Subscriber, Writable, Unsubscriber } from 'svelte/store';
 
 import type { Token, User } from 'bmlt-server-client';
@@ -131,3 +131,14 @@ export class ApiCredentialsStore {
 }
 
 export const apiCredentials = new ApiCredentialsStore();
+
+// Create a reactive derived store for login status
+export const isLoggedIn = derived(
+  apiCredentials,
+  ($token) => {
+    if (!$token) return false;
+    const currentTime = Math.floor(Date.now() / 1000);
+    const expiresIn = $token.expiresAt - currentTime;
+    return expiresIn > 20;
+  }
+);

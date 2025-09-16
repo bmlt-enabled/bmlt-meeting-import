@@ -17,10 +17,11 @@
 
   interface Props {
     apiCredentials: ApiCredentialsStore;
-    authenticated: () => void;
+    authenticated?: () => void;
+    loginFailed?: () => void;
   }
 
-  let { apiCredentials, authenticated }: Props = $props();
+  let { apiCredentials, authenticated, loginFailed }: Props = $props();
   let errorMessage: string | undefined = $state();
 
   let servers = $state<Server[]>([]);
@@ -43,7 +44,8 @@
     },
     onSuccess: () => {
       spinner.hide();
-      authenticated();
+      errorMessage = undefined;
+      authenticated?.();
     },
     onError: async (error) => {
       await RootServerApi.handleErrors(error as Error, {
@@ -61,6 +63,7 @@
         }
       });
       spinner.hide();
+      loginFailed?.();
     },
     extend: validator({
       schema: yup.object({
@@ -82,7 +85,10 @@
       // Set initial server if defaultRootServerURL matches any server
       selectedServer = servers.find((s) => s.rootURL === defaultRootServerURL);
       if (selectedServer) {
-        rootServerURL = selectedServer.rootURL;
+        await updateRootServerURL(selectedServer.rootURL);
+      } else {
+        // Set default server URL if no match found
+        await updateRootServerURL(defaultRootServerURL);
       }
     } catch (error) {
       console.error('Failed to fetch server list -- ' + error);
@@ -96,8 +102,12 @@
     const s = url.trim();
     // rootServerURL should always end in a '/', unless it's the empty string
     rootServerURL = s === '' || s.endsWith('/') ? s : s + '/';
-    // Reset 'operation' when the root server URL changes.  There will also be state for the different operations, but since these are
-    // in separate components that state gets reset when the component is rendered again.
+    
+    // Update the API client with the new server URL
+    if (rootServerURL) {
+      RootServerApi.updateServerUrl(rootServerURL);
+      console.log('Updated server URL to:', rootServerURL);
+    }
   }
 
   function handleServerSelect(event: Event) {
@@ -110,7 +120,10 @@
     } else {
       showCustomServerInput = false;
       const server = servers.find((s) => s.id === select.value);
-      updateRootServerURL(server ? server.rootURL : '');
+      selectedServer = server;
+      if (server) {
+        updateRootServerURL(server.rootURL);
+      }
     }
   }
 
