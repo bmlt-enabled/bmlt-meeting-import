@@ -101,16 +101,22 @@ export class SpreadsheetProcessor {
   }
 
   private static validateAndProcess(rawData: string[][]): ProcessedSpreadsheet {
+    // Filter out empty rows first
+    const nonEmptyRows = rawData.filter((row, index) => {
+      if (index === 0) return true; // Always include header
+      return row && row.some((cell) => cell !== undefined && cell !== null && cell.toString().trim() !== '');
+    });
+
     const result: ProcessedSpreadsheet = {
       rows: [],
-      totalRows: rawData.length - 1, // Exclude header
+      totalRows: nonEmptyRows.length - 1, // Exclude header
       validRows: 0,
       errors: [],
       warnings: []
     };
 
     // Get and normalize headers
-    const headers = rawData[0].map((header) => (header ? header.toString().toLowerCase().trim() : ''));
+    const headers = nonEmptyRows[0].map((header) => (header ? header.toString().toLowerCase().trim() : ''));
 
     // Validate required columns are present
     const missingColumns: string[] = [];
@@ -131,8 +137,8 @@ export class SpreadsheetProcessor {
     }
 
     // Process each data row
-    for (let i = 1; i < rawData.length; i++) {
-      const row = rawData[i];
+    for (let i = 1; i < nonEmptyRows.length; i++) {
+      const row = nonEmptyRows[i];
 
       // Simple empty row check
       if (!row || row.length === 0) {
