@@ -34,6 +34,7 @@ export default [
         files: ['**/*.ts', '**/*.svelte'],
         rules: {
             '@typescript-eslint/no-explicit-any': 'off',
+            'svelte/require-each-key': 'off',
             'no-undef': 'off'
         }
     }

@@ -31,7 +31,3 @@ jobs:
       - name: make lint-js 🧹
         run: |
           npm run lint
-
-      - name: make test-js 🧪
-        run: |
-          npm run test

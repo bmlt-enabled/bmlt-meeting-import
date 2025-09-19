@@ -28,6 +28,7 @@ import {
   type ValidationError
 } from 'bmlt-server-client';
 import { errorModal } from '../stores/errorModal';
+import { currentServerUrl } from '../stores/apiCredentials';
 
 class ApiClient extends RootServerApi {
   private authorizationHeader: string | null = null;
@@ -74,21 +75,29 @@ class ApiClient extends RootServerApi {
   updateServerUrl(baseUrl: string): void {
     const normalizedUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
     const currentUrl = this.configuration.basePath || '';
-    
+
     // Only clear token if actually switching to a different server
     if (currentUrl !== normalizedUrl) {
       console.log('Switching servers from', currentUrl, 'to', normalizedUrl);
       this.token = null;
     }
-    
+
     this.configuration = new Configuration({
       basePath: normalizedUrl,
       accessToken: () => this.authorizationHeader ?? ''
     });
+
+    // Update the reactive store
+    this.updateCurrentServerUrlStore();
   }
 
   get currentServerUrl(): string {
     return this.configuration.basePath || '';
+  }
+
+  private updateCurrentServerUrlStore(): void {
+    // Update the reactive store with the new URL
+    currentServerUrl.set(this.currentServerUrl);
   }
 
   async getLaravelLog(): Promise<Blob> {

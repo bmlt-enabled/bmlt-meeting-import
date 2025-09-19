@@ -133,12 +133,12 @@ export class ApiCredentialsStore {
 export const apiCredentials = new ApiCredentialsStore();
 
 // Create a reactive derived store for login status
-export const isLoggedIn = derived(
-  apiCredentials,
-  ($token) => {
-    if (!$token) return false;
-    const currentTime = Math.floor(Date.now() / 1000);
-    const expiresIn = $token.expiresAt - currentTime;
-    return expiresIn > 20;
-  }
-);
+export const isLoggedIn = derived(apiCredentials, ($token) => {
+  if (!$token) return false;
+  const currentTime = Math.floor(Date.now() / 1000);
+  const expiresIn = $token.expiresAt - currentTime;
+  return expiresIn > 20;
+});
+
+// Create a reactive store for the current server URL
+export const currentServerUrl = writable(RootServerApi.currentServerUrl);

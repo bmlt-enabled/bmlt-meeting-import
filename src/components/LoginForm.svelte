@@ -102,7 +102,7 @@
     const s = url.trim();
     // rootServerURL should always end in a '/', unless it's the empty string
     rootServerURL = s === '' || s.endsWith('/') ? s : s + '/';
-    
+
     // Update the API client with the new server URL
     if (rootServerURL) {
       RootServerApi.updateServerUrl(rootServerURL);
