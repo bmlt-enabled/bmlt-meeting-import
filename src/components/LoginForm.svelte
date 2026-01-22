@@ -91,7 +91,7 @@
         await updateRootServerURL(defaultRootServerURL);
       }
     } catch (error) {
-      console.error('Failed to fetch server list -- ' + error);
+      // console.error('Failed to fetch server list -- ' + error);
       serverError = 'Failed to fetch server list ' + error;
     } finally {
       isLoadingServers = false;
@@ -106,7 +106,6 @@
     // Update the API client with the new server URL
     if (rootServerURL) {
       RootServerApi.updateServerUrl(rootServerURL);
-      console.log('Updated server URL to:', rootServerURL);
     }
   }
 

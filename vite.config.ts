@@ -11,6 +11,11 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'jsdom',
+    environmentOptions: {
+      jsdom: {
+        runScripts: 'outside-only'
+      }
+    },
     setupFiles: './src/tests/setup.ts',
     include: ['src/**/*.{test,spec}.{js,ts}']
   },
