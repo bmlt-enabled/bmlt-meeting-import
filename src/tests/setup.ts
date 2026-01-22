@@ -1,7 +1,6 @@
 import '@testing-library/jest-dom/vitest';
-import { vi } from 'vitest';
 
-globalThis.window.matchMedia = vi.fn().mockImplementation((query) => ({
+global.window.matchMedia = vi.fn().mockImplementation((query) => ({
   matches: false,
   media: query,
   onchange: null,
@@ -11,3 +10,5 @@ globalThis.window.matchMedia = vi.fn().mockImplementation((query) => ({
   removeEventListener: vi.fn(),
   dispatchEvent: vi.fn()
 }));
+
+global.window.scrollTo = vi.fn();
