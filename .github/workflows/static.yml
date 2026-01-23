@@ -41,6 +41,7 @@ jobs:
         run: |
           npm ci
           npm run build
+          touch ./dist/.nojekyll && echo 'import.bmlt.app' > ./dist/CNAME
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v4
         with:
