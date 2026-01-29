@@ -3,6 +3,8 @@
 A tool for importing meetings to BMLT (Basic Meeting List Toolbox) servers. The application
 provides a web interface to authenticate with BMLT servers and import meeting data from a spreadsheet.
 
+> **Warning:** This tool modifies meeting data directly on the connected BMLT server. Always test imports on a staging or test server before running against a production server. The maintainers are not responsible for any data loss or corruption resulting from use of this tool.
+
 ---
 
 # BMLT Meeting Import Notes
