@@ -1,4 +1,4 @@
-import type { Meeting } from 'bmlt-server-client';
+import { ResponseError, type Meeting } from 'bmlt-server-client';
 import type { NAWSRow } from './SpreadsheetProcessor';
 import { SpreadsheetProcessor } from './SpreadsheetProcessor';
 import { NAWSMapper, type MappingOptions } from './NAWSMapper';
@@ -329,7 +329,23 @@ export class MeetingImportService {
             };
           }
         } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+          let errorMessage = 'Unknown error';
+          if (error instanceof ResponseError) {
+            try {
+              const body = await error.response.json();
+              if (body.message) {
+                errorMessage = body.message;
+              } else if (body.errors) {
+                // Flatten field errors into a readable message
+                const fieldErrors = Object.values(body.errors).flat();
+                errorMessage = fieldErrors.join(', ');
+              }
+            } catch {
+              errorMessage = error.message;
+            }
+          } else if (error instanceof Error) {
+            errorMessage = error.message;
+          }
           return {
             success: false,
             skipped: false,
