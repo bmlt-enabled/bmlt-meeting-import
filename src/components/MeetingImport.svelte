@@ -357,7 +357,13 @@
         {:else if !$isLoggedIn}
           <Helper class="text-center text-gray-500 dark:text-gray-400">Please log in to import meetings</Helper>
         {:else}
-          <Helper class="text-center text-gray-500 dark:text-gray-400">Select a valid NAWS export file to begin import</Helper>
+          <Helper class="text-center text-gray-500 dark:text-gray-400"
+            >Select a valid NAWS export file to begin import (<a
+              href="/BMLT_Export_Example.xlsx"
+              download
+              class="text-primary-600 hover:text-primary-800 dark:text-primary-400 dark:hover:text-primary-300 underline">download example</a
+            >)</Helper
+          >
         {/if}
       </div>
 
