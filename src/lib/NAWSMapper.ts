@@ -160,6 +160,9 @@ export class NAWSMapper {
   private mapFormats(nawsRow: NAWSRow, rowIndex: number, result: MappingResult): number[] {
     const formatIds = new Set<number>();
 
+    // These formats are restricted/auto-managed by the server based on venue type
+    const restrictedFormats = new Set(['TC', 'VM', 'HY']);
+
     // Handle wheelchair accessibility
     if (nawsRow.wheelchr?.toLowerCase() === 'true' || nawsRow.wheelchr === '1') {
       const wchrFormats = this.formatWorldIdMap.get('WCHR');
@@ -176,7 +179,12 @@ export class NAWSMapper {
     formatColumns.forEach((column) => {
       const formatValue = nawsRow[column];
       if (formatValue && formatValue.trim()) {
-        const formats = this.formatWorldIdMap.get(formatValue.toUpperCase());
+        const upperValue = formatValue.toUpperCase();
+        // Skip restricted formats that are auto-managed by the server
+        if (restrictedFormats.has(upperValue)) {
+          return;
+        }
+        const formats = this.formatWorldIdMap.get(upperValue);
         if (formats) {
           formats.forEach((id) => formatIds.add(id));
         } else {
@@ -193,7 +201,9 @@ export class NAWSMapper {
     const VENUE_TYPE_VIRTUAL = 2;
     const VENUE_TYPE_HYBRID = 3;
 
-    const hasPhysicalLocation = !!(nawsRow.address?.trim() || nawsRow.city?.trim());
+    // Only consider it a physical location if there's a street address
+    // City alone is not enough (virtual meetings may have city for timezone geocoding)
+    const hasPhysicalLocation = !!nawsRow.address?.trim();
     const hasVirtualInfo = !!(nawsRow.virtualmeetinglink?.trim() || nawsRow.phonemeetingnumber?.trim());
 
     if (hasPhysicalLocation && hasVirtualInfo) {
