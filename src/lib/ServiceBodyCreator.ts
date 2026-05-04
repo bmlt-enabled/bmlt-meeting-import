@@ -86,7 +86,7 @@ export class ServiceBodyCreator {
       adminUser = await RootServerApi.getUser(currentUserId);
       console.log(`Using current user '${adminUser.username}' as admin for service body '${areaName}'`);
     } catch (error) {
-      throw new Error(`Failed to get current user for service body admin: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(`Failed to get current user for service body admin: ${error instanceof Error ? error.message : 'Unknown error'}`, { cause: error });
     }
 
     // Create the service body if it doesn't exist
@@ -122,7 +122,7 @@ export class ServiceBodyCreator {
         isNewServiceBody: true
       };
     } catch (error) {
-      throw new Error(`Failed to create service body: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(`Failed to create service body: ${error instanceof Error ? error.message : 'Unknown error'}`, { cause: error });
     }
   }
 

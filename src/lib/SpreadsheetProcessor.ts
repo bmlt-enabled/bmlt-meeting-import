@@ -96,7 +96,7 @@ export class SpreadsheetProcessor {
       onProgress?.('Validating and processing...');
       return this.validateAndProcess(rawData);
     } catch (error) {
-      throw new Error(`Error processing spreadsheet: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(`Error processing spreadsheet: ${error instanceof Error ? error.message : 'Unknown error'}`, { cause: error });
     }
   }
 
