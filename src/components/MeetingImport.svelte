@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { Button, Card, Helper, Heading, Modal, P, Fileupload, Alert, Toast } from 'flowbite-svelte';
+  import { Button, Card, Checkbox, Helper, Heading, Input, Label, Modal, P, Fileupload, Alert, Toast } from 'flowbite-svelte';
 
   import { apiCredentials, authenticatedUser, isLoggedIn, currentServerUrl } from '../stores/apiCredentials';
   import LoginForm from './LoginForm.svelte';
-  import { MeetingImportService, type ImportProgress, type ImportResult } from '../lib/MeetingImportService';
+  import { MeetingImportService, type BmltSourcePreview, type ImportProgress, type ImportResult } from '../lib/MeetingImportService';
   import { onDestroy } from 'svelte';
 
   let formModal = $state(false);
@@ -21,6 +21,18 @@
   let isValidatingFile = $state(false);
   let fileValidationMessage = $state('Validating file...');
   let importAbortController: AbortController | null = $state(null);
+
+  // Importing straight from another BMLT server
+  let importSource: 'file' | 'server' = $state('file');
+  let sourceUrl = $state('');
+  let sourceServiceBodyIds = $state('');
+  let sourceRecursive = $state(true);
+  let sourceIncludeUnpublished = $state(false);
+  let sourceTimeZone = $state('');
+  let sourcePreview: BmltSourcePreview | null = $state(null);
+  let isLoadingPreview = $state(false);
+  let previewMessage = $state('');
+  let previewError = $state('');
 
   function onaction({ action, data }: { action: string; data: FormData }) {
     // Check the data validity, return false to prevent dialog closing; anything else to proceed
@@ -182,6 +194,110 @@
     }
   }
 
+  function failedImportResult(message: string): ImportResult {
+    return {
+      success: false,
+      totalProcessed: 0,
+      successfulImports: 0,
+      failedImports: 0,
+      skippedImports: 0,
+      servicesBodiesCreated: 0,
+      errors: [message],
+      warnings: [],
+      createdMeetings: [],
+      duration: 0
+    };
+  }
+
+  async function loadSourcePreview(): Promise<void> {
+    if (!sourceUrl.trim()) {
+      return;
+    }
+
+    isLoadingPreview = true;
+    previewError = '';
+    sourcePreview = null;
+    previewMessage = 'Reading source server...';
+
+    try {
+      sourcePreview = await MeetingImportService.previewBmltSource(
+        sourceUrl,
+        {
+          serviceBodyIds: sourceServiceBodyIds
+            .split(',')
+            .map((id) => id.trim())
+            .filter(Boolean),
+          recursive: sourceRecursive,
+          includeUnpublished: sourceIncludeUnpublished
+        },
+        (message) => {
+          previewMessage = message;
+        }
+      );
+    } catch (error) {
+      previewError = error instanceof Error ? error.message : 'Could not read the source server';
+    } finally {
+      isLoadingPreview = false;
+    }
+  }
+
+  async function importMeetingsFromServer(): Promise<void> {
+    if (!sourcePreview) {
+      meetingImportError = true;
+      return;
+    }
+
+    try {
+      meetingImportError = false;
+      isImportingMeetings = true;
+      importResult = null;
+      importProgress = null;
+      importAbortController = new AbortController();
+
+      const result = await MeetingImportService.importFromBmltServer(
+        sourcePreview,
+        {
+          defaultTimeZone: sourceTimeZone.trim(),
+          defaultLatitude: 0,
+          defaultLongitude: 0
+        },
+        (progress) => {
+          importProgress = progress;
+        },
+        importAbortController.signal
+      );
+
+      importResult = result;
+      showImportResults = true;
+
+      if (!result.success) {
+        meetingImportError = true;
+      }
+    } catch (err) {
+      console.error('Import failed:', err);
+
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        importResult = failedImportResult('Import cancelled by user');
+        showImportResults = true;
+        meetingImportError = false;
+      } else {
+        meetingImportError = true;
+        importResult = failedImportResult(err instanceof Error ? err.message : 'Unknown error occurred');
+      }
+    } finally {
+      isImportingMeetings = false;
+      importProgress = null;
+      importAbortController = null;
+    }
+  }
+
+  function selectImportSource(source: 'file' | 'server'): void {
+    importSource = source;
+    importResult = null;
+    showImportResults = false;
+    meetingImportError = false;
+  }
+
   function cancelImport(): void {
     if (importAbortController && !importAbortController.signal.aborted) {
       importAbortController.abort();
@@ -195,6 +311,8 @@
     importProgress = null;
     showImportResults = false;
     meetingImportError = false;
+    sourcePreview = null;
+    previewError = '';
 
     // Reset file input
     const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
@@ -222,6 +340,7 @@
     importResult = null;
     importProgress = null;
     importAbortController = null;
+    sourcePreview = null;
   }
 
   // Cleanup on component destroy
@@ -268,8 +387,16 @@
         {/if}
       </div>
 
-      <!-- File Upload Section -->
+      <!-- Import Source -->
       {#if $isLoggedIn}
+        <div class="mb-4 grid grid-cols-2 gap-2">
+          <Button size="sm" color={importSource === 'file' ? 'primary' : 'alternative'} onclick={() => selectImportSource('file')} disabled={isImportingMeetings}>Spreadsheet</Button>
+          <Button size="sm" color={importSource === 'server' ? 'primary' : 'alternative'} onclick={() => selectImportSource('server')} disabled={isImportingMeetings}>BMLT Server</Button>
+        </div>
+      {/if}
+
+      <!-- File Upload Section -->
+      {#if $isLoggedIn && importSource === 'file'}
         <div class="mb-6 space-y-4">
           <div class="mb-4">
             <label class="mb-2 block text-sm font-medium text-gray-900 dark:text-gray-300" for="file-upload"> Select NAWS Export File </label>
@@ -321,6 +448,90 @@
         </div>
       {/if}
 
+      <!-- BMLT Server Source Section -->
+      {#if $isLoggedIn && importSource === 'server'}
+        <div class="mb-6 space-y-4 text-left">
+          <div>
+            <Label for="source-url" class="mb-2">Source root server URL</Label>
+            <Input id="source-url" bind:value={sourceUrl} placeholder="https://bmlt.example.org/main_server/" disabled={isImportingMeetings} />
+            <Helper class="mt-2">Meetings are read from this server's public interface and copied to {$currentServerUrl}.</Helper>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <Label for="source-services" class="mb-2">Service body ids</Label>
+              <Input id="source-services" bind:value={sourceServiceBodyIds} placeholder="All" disabled={isImportingMeetings} />
+            </div>
+            <div>
+              <Label for="source-timezone" class="mb-2">Fallback time zone</Label>
+              <Input id="source-timezone" bind:value={sourceTimeZone} placeholder="America/Denver" disabled={isImportingMeetings} />
+            </div>
+          </div>
+
+          <div class="space-y-2">
+            <Checkbox bind:checked={sourceRecursive} disabled={isImportingMeetings}>Include child service bodies</Checkbox>
+            <Checkbox bind:checked={sourceIncludeUnpublished} disabled={isImportingMeetings}>Include unpublished meetings</Checkbox>
+          </div>
+
+          <Button size="sm" color="alternative" class="w-full" onclick={loadSourcePreview} disabled={!sourceUrl.trim() || isLoadingPreview || isImportingMeetings}>
+            {sourcePreview ? 'Refresh preview' : 'Read source server'}
+          </Button>
+
+          {#if isLoadingPreview}
+            <div class="flex items-center justify-center space-x-2 py-2">
+              <div class="h-4 w-4 animate-spin rounded-full border-2 border-blue-600 border-t-transparent"></div>
+              <span class="text-sm text-gray-600 dark:text-gray-400">{previewMessage}</span>
+            </div>
+          {/if}
+
+          {#if previewError}
+            <Alert color="red">
+              <span class="font-medium">Could not read the source server:</span>
+              <div class="mt-1 text-sm">{previewError}</div>
+            </Alert>
+          {/if}
+
+          {#if sourcePreview}
+            <Alert color="green">
+              <span class="font-medium">Found {sourcePreview.meetingCount} meetings</span>
+              <div class="mt-1 text-sm">across {sourcePreview.serviceBodyMatches.filter((match) => !match.ancestorOnly).length} service bodies.</div>
+            </Alert>
+
+            <div class="rounded-lg border border-gray-200 dark:border-gray-700">
+              <div class="border-b border-gray-200 px-3 py-2 text-sm font-medium text-gray-900 dark:border-gray-700 dark:text-gray-200">Service bodies</div>
+              <ul class="max-h-48 divide-y divide-gray-100 overflow-y-auto text-sm dark:divide-gray-700">
+                {#each sourcePreview.serviceBodyMatches as match}
+                  <li class="flex items-start justify-between gap-2 px-3 py-2">
+                    <span class="text-gray-700 dark:text-gray-300">
+                      {match.source.name}
+                      {#if match.ancestorOnly}
+                        <span class="text-xs text-gray-400">(parent only)</span>
+                      {:else}
+                        <span class="text-xs text-gray-400">({match.meetingCount})</span>
+                      {/if}
+                    </span>
+                    {#if match.destination}
+                      <span class="shrink-0 text-green-600 dark:text-green-400">matched by {match.matchedBy}</span>
+                    {:else}
+                      <span class="shrink-0 text-blue-600 dark:text-blue-400">will be created</span>
+                    {/if}
+                  </li>
+                {/each}
+              </ul>
+            </div>
+
+            {#if sourcePreview.unmatchedFormats.length > 0}
+              <Alert color="yellow">
+                <span class="font-medium">Formats with no match on this server:</span>
+                <div class="mt-1 text-sm">
+                  {sourcePreview.unmatchedFormats.map((match) => match.source.key_string).join(', ')} — these will be dropped.
+                </div>
+              </Alert>
+            {/if}
+          {/if}
+        </div>
+      {/if}
+
       <!-- Import Progress -->
       {#if importProgress}
         <div class="mb-6 space-y-2">
@@ -339,23 +550,29 @@
 
       <!-- Action Buttons -->
       <div class="flex flex-col space-y-2">
-        {#if selectedFile && fileValidation?.valid && !showImportResults}
-          {#if isImportingMeetings}
-            <Button onclick={cancelImport} color="red" class="w-full">
-              <div class="flex items-center justify-center">
-                <div class="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"></div>
-                Cancel Import
-              </div>
-            </Button>
-          {:else}
-            <Button onclick={importMeetingsFromSpreadsheet} disabled={!$isLoggedIn} color="primary" class="w-full">
-              Import {fileValidation.preview.validRows} Meetings
-            </Button>
-          {/if}
+        {#if isImportingMeetings}
+          <Button onclick={cancelImport} color="red" class="w-full">
+            <div class="flex items-center justify-center">
+              <div class="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"></div>
+              Cancel Import
+            </div>
+          </Button>
         {:else if showImportResults}
-          <Button onclick={resetImport} color="alternative" class="w-full">Import Another File</Button>
+          <Button onclick={resetImport} color="alternative" class="w-full">Start Another Import</Button>
         {:else if !$isLoggedIn}
           <Helper class="text-center text-gray-500 dark:text-gray-400">Please log in to import meetings</Helper>
+        {:else if importSource === 'server'}
+          {#if sourcePreview}
+            <Button onclick={importMeetingsFromServer} color="primary" class="w-full">
+              Import {sourcePreview.meetingCount} Meetings
+            </Button>
+          {:else}
+            <Helper class="text-center text-gray-500 dark:text-gray-400">Enter a source root server URL and read it to begin</Helper>
+          {/if}
+        {:else if selectedFile && fileValidation?.valid}
+          <Button onclick={importMeetingsFromSpreadsheet} color="primary" class="w-full">
+            Import {fileValidation.preview.validRows} Meetings
+          </Button>
         {:else}
           <Helper class="text-center text-gray-500 dark:text-gray-400"
             >Select a valid NAWS export file to begin import (<a

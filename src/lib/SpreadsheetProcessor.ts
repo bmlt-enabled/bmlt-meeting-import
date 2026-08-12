@@ -30,6 +30,9 @@ export interface NAWSRow {
   virtualmeetinglink?: string;
   virtualmeetinginfo?: string;
   timezone?: string;
+  duration?: string;
+  venuetype?: string;
+  published?: string;
   [key: string]: string | undefined;
 }
 
@@ -73,6 +76,10 @@ export class SpreadsheetProcessor {
     'virtualmeetinginfo',
     'timezone'
   ];
+
+  // Not part of the NAWS export format. When a spreadsheet supplies them they
+  // override the per-import defaults; when absent nothing changes.
+  private static readonly OPTIONAL_COLUMNS = ['duration', 'venuetype', 'published'];
 
   private static readonly REQUIRED_COLUMNS = ['committeename', 'arearegion', 'day', 'time'];
 
@@ -136,6 +143,15 @@ export class SpreadsheetProcessor {
       return result;
     }
 
+    this.OPTIONAL_COLUMNS.forEach((optionalCol) => {
+      const index = headers.indexOf(optionalCol);
+      if (index !== -1) {
+        columnMap[optionalCol] = index;
+      }
+    });
+
+    const presentColumns = [...this.EXPECTED_COLUMNS, ...this.OPTIONAL_COLUMNS.filter((col) => columnMap[col] !== undefined)];
+
     // Process each data row
     for (let i = 1; i < nonEmptyRows.length; i++) {
       const row = nonEmptyRows[i];
@@ -149,7 +165,7 @@ export class SpreadsheetProcessor {
       let hasRequiredData = true;
 
       // Map columns to NAWS format
-      this.EXPECTED_COLUMNS.forEach((colName) => {
+      presentColumns.forEach((colName) => {
         const colIndex = columnMap[colName];
         if (colIndex !== undefined && colIndex < row.length) {
           const cellValue = row[colIndex];
@@ -181,6 +197,20 @@ export class SpreadsheetProcessor {
       if (nawsRow.time && !this.isValidTime(nawsRow.time)) {
         result.warnings.push(`Row ${i + 1}: Invalid time format '${nawsRow.time}'`);
         hasRequiredData = false;
+      }
+
+      // Optional overrides fall back to the import defaults when unusable, so
+      // these only warn.
+      if (nawsRow.duration && !this.parseDuration(nawsRow.duration)) {
+        result.warnings.push(`Row ${i + 1}: Invalid duration '${nawsRow.duration}' - using the default duration`);
+      }
+
+      if (nawsRow.venuetype && !this.parseVenueType(nawsRow.venuetype)) {
+        result.warnings.push(`Row ${i + 1}: Invalid venue type '${nawsRow.venuetype}' - venue type will be detected from the row`);
+      }
+
+      if (nawsRow.published && this.parseBoolean(nawsRow.published) === undefined) {
+        result.warnings.push(`Row ${i + 1}: Invalid published value '${nawsRow.published}' - using the default`);
       }
 
       if (nawsRow.longitude && !this.isValidCoordinate(nawsRow.longitude, -180, 180)) {
@@ -262,6 +292,68 @@ export class SpreadsheetProcessor {
     }
 
     return '12:00'; // Default fallback
+  }
+
+  /**
+   * Accepts 'HH:MM', 'HH:MM:SS', or a whole number of minutes ('90').
+   * Returns 'HH:MM', or undefined when the value can't be understood.
+   */
+  static parseDuration(duration: string): string | undefined {
+    const value = duration.toString().trim();
+    if (!value) {
+      return undefined;
+    }
+
+    const clockMatch = value.match(/^(\d{1,2}):([0-5]\d)(?::[0-5]\d)?$/);
+    if (clockMatch) {
+      return `${clockMatch[1].padStart(2, '0')}:${clockMatch[2]}`;
+    }
+
+    if (/^\d+$/.test(value)) {
+      const minutes = parseInt(value, 10);
+      // A bare number is minutes; anything past a day is a typo, not a meeting.
+      if (minutes > 0 && minutes < 24 * 60) {
+        return `${Math.floor(minutes / 60)
+          .toString()
+          .padStart(2, '0')}:${(minutes % 60).toString().padStart(2, '0')}`;
+      }
+    }
+
+    return undefined;
+  }
+
+  /** Accepts 1/2/3 or in-person/virtual/hybrid. */
+  static parseVenueType(venueType: string): number | undefined {
+    const value = venueType.toString().trim().toLowerCase();
+
+    const named: { [key: string]: number } = {
+      '1': 1,
+      'in-person': 1,
+      inperson: 1,
+      'in person': 1,
+      face_to_face: 1,
+      '2': 2,
+      virtual: 2,
+      online: 2,
+      '3': 3,
+      hybrid: 3
+    };
+
+    return named[value];
+  }
+
+  /** Accepts TRUE/FALSE, 1/0, yes/no. Undefined when unrecognized. */
+  static parseBoolean(value: string): boolean | undefined {
+    const normalized = value.toString().trim().toLowerCase();
+
+    if (['true', '1', 'yes', 'y'].includes(normalized)) {
+      return true;
+    }
+    if (['false', '0', 'no', 'n'].includes(normalized)) {
+      return false;
+    }
+
+    return undefined;
   }
 
   static mapDayToBMLT(day: string): number {

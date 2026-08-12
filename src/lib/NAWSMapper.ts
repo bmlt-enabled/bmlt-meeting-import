@@ -117,11 +117,11 @@ export class NAWSMapper {
         temporarilyVirtual: false,
         day: SpreadsheetProcessor.mapDayToBMLT(nawsRow.day),
         startTime: SpreadsheetProcessor.formatTimeForBMLT(nawsRow.time),
-        duration: this.options.defaultDuration,
+        duration: this.determineDuration(nawsRow),
         timeZone: nawsRow.timezone || '',
         latitude: this.parseCoordinate(nawsRow.latitude, this.options.defaultLatitude),
         longitude: this.parseCoordinate(nawsRow.longitude, this.options.defaultLongitude),
-        published: this.options.defaultPublished,
+        published: this.determinePublished(nawsRow),
         email: '',
         worldId: nawsRow.committee || '',
         name: nawsRow.committeename,
@@ -160,8 +160,9 @@ export class NAWSMapper {
   private mapFormats(nawsRow: NAWSRow, rowIndex: number, result: MappingResult): number[] {
     const formatIds = new Set<number>();
 
-    // These formats are restricted/auto-managed by the server based on venue type
-    const restrictedFormats = new Set(['TC', 'VM', 'HY']);
+    // These formats are restricted/auto-managed by the server based on venue type.
+    // HYBR is what the hybrid format's worldId is on a stock server; HY is the NAWS code.
+    const restrictedFormats = new Set(['TC', 'VM', 'HY', 'HYBR']);
 
     // Handle wheelchair accessibility
     if (nawsRow.wheelchr?.toLowerCase() === 'true' || nawsRow.wheelchr === '1') {
@@ -201,10 +202,20 @@ export class NAWSMapper {
     const VENUE_TYPE_VIRTUAL = 2;
     const VENUE_TYPE_HYBRID = 3;
 
+    // An explicit VenueType column always wins over detection
+    if (nawsRow.venuetype?.trim()) {
+      const explicitVenueType = SpreadsheetProcessor.parseVenueType(nawsRow.venuetype);
+      if (explicitVenueType) {
+        return explicitVenueType;
+      }
+    }
+
     // Only consider it a physical location if there's a street address
     // City alone is not enough (virtual meetings may have city for timezone geocoding)
     const hasPhysicalLocation = !!nawsRow.address?.trim();
-    const hasVirtualInfo = !!(nawsRow.virtualmeetinglink?.trim() || nawsRow.phonemeetingnumber?.trim());
+    // Some exports carry only the dial-in details (a Zoom ID and passcode) with
+    // no link or phone column, so treat that as virtual info too
+    const hasVirtualInfo = !!(nawsRow.virtualmeetinglink?.trim() || nawsRow.phonemeetingnumber?.trim() || nawsRow.virtualmeetinginfo?.trim());
 
     if (hasPhysicalLocation && hasVirtualInfo) {
       return VENUE_TYPE_HYBRID;
@@ -213,6 +224,28 @@ export class NAWSMapper {
     } else {
       return VENUE_TYPE_IN_PERSON;
     }
+  }
+
+  private determineDuration(nawsRow: NAWSRow): string {
+    if (nawsRow.duration?.trim()) {
+      const parsed = SpreadsheetProcessor.parseDuration(nawsRow.duration);
+      if (parsed) {
+        return parsed;
+      }
+    }
+
+    return this.options.defaultDuration;
+  }
+
+  private determinePublished(nawsRow: NAWSRow): boolean {
+    if (nawsRow.published?.trim()) {
+      const parsed = SpreadsheetProcessor.parseBoolean(nawsRow.published);
+      if (parsed !== undefined) {
+        return parsed;
+      }
+    }
+
+    return this.options.defaultPublished;
   }
 
   private buildLocationInfo(nawsRow: NAWSRow): string {

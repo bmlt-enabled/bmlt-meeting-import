@@ -230,6 +230,108 @@ describe('NAWSMapper', () => {
 
       expect(result.meeting?.venueType).toBe(3); // VENUE_TYPE_HYBRID
     });
+
+    test('detects virtual venue when only virtual meeting info is present', () => {
+      const mapper = new NAWSMapper(createDefaultOptions());
+      const nawsRow = createValidNAWSRow({
+        address: '',
+        city: '',
+        virtualmeetinginfo: 'Zoom ID: 878 7947 7097, Password: JFT2023'
+      });
+
+      const result = mapper.mapNAWSRowToMeeting(nawsRow, 2);
+
+      expect(result.meeting?.venueType).toBe(2); // VENUE_TYPE_VIRTUAL
+    });
+
+    test('detects hybrid venue when address is paired with virtual meeting info', () => {
+      const mapper = new NAWSMapper(createDefaultOptions());
+      const nawsRow = createValidNAWSRow({
+        address: '123 Main St',
+        virtualmeetinginfo: 'Zoom ID: 878 7947 7097, Password: JFT2023'
+      });
+
+      const result = mapper.mapNAWSRowToMeeting(nawsRow, 2);
+
+      expect(result.meeting?.venueType).toBe(3); // VENUE_TYPE_HYBRID
+    });
+
+    test('an explicit venue type overrides detection', () => {
+      const mapper = new NAWSMapper(createDefaultOptions());
+      const nawsRow = createValidNAWSRow({
+        address: '123 Main St',
+        virtualmeetinglink: 'https://zoom.us/j/123456',
+        venuetype: 'in-person'
+      });
+
+      const result = mapper.mapNAWSRowToMeeting(nawsRow, 2);
+
+      expect(result.meeting?.venueType).toBe(1); // VENUE_TYPE_IN_PERSON
+    });
+
+    test('falls back to detection when the explicit venue type is unusable', () => {
+      const mapper = new NAWSMapper(createDefaultOptions());
+      const nawsRow = createValidNAWSRow({
+        address: '',
+        virtualmeetinglink: 'https://zoom.us/j/123456',
+        venuetype: 'somewhere'
+      });
+
+      const result = mapper.mapNAWSRowToMeeting(nawsRow, 2);
+
+      expect(result.meeting?.venueType).toBe(2); // VENUE_TYPE_VIRTUAL
+    });
+  });
+
+  describe('duration', () => {
+    test('uses the default duration when no column is supplied', () => {
+      const mapper = new NAWSMapper(createDefaultOptions());
+
+      const result = mapper.mapNAWSRowToMeeting(createValidNAWSRow(), 2);
+
+      expect(result.meeting?.duration).toBe('01:00');
+    });
+
+    test('uses a per-row duration when supplied', () => {
+      const mapper = new NAWSMapper(createDefaultOptions());
+
+      expect(mapper.mapNAWSRowToMeeting(createValidNAWSRow({ duration: '01:30:00' }), 2).meeting?.duration).toBe('01:30');
+      expect(mapper.mapNAWSRowToMeeting(createValidNAWSRow({ duration: '90' }), 2).meeting?.duration).toBe('01:30');
+    });
+
+    test('falls back to the default when the duration is unusable', () => {
+      const mapper = new NAWSMapper(createDefaultOptions());
+
+      const result = mapper.mapNAWSRowToMeeting(createValidNAWSRow({ duration: 'an hour' }), 2);
+
+      expect(result.meeting?.duration).toBe('01:00');
+    });
+  });
+
+  describe('published', () => {
+    test('uses the default when no column is supplied', () => {
+      const mapper = new NAWSMapper({ ...createDefaultOptions(), defaultPublished: true });
+
+      const result = mapper.mapNAWSRowToMeeting(createValidNAWSRow(), 2);
+
+      expect(result.meeting?.published).toBe(true);
+    });
+
+    test('uses a per-row published flag when supplied', () => {
+      const mapper = new NAWSMapper({ ...createDefaultOptions(), defaultPublished: true });
+
+      const result = mapper.mapNAWSRowToMeeting(createValidNAWSRow({ published: 'FALSE' }), 2);
+
+      expect(result.meeting?.published).toBe(false);
+    });
+
+    test('falls back to the default when the published flag is unusable', () => {
+      const mapper = new NAWSMapper({ ...createDefaultOptions(), defaultPublished: true });
+
+      const result = mapper.mapNAWSRowToMeeting(createValidNAWSRow({ published: 'maybe' }), 2);
+
+      expect(result.meeting?.published).toBe(true);
+    });
   });
 
   describe('coordinate parsing', () => {
