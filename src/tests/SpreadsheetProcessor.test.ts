@@ -57,4 +57,60 @@ describe('SpreadsheetProcessor', () => {
       expect(SpreadsheetProcessor.mapDayToBMLT('')).toBe(0);
     });
   });
+
+  describe('parseDuration', () => {
+    test('parses clock formats', () => {
+      expect(SpreadsheetProcessor.parseDuration('1:30')).toBe('01:30');
+      expect(SpreadsheetProcessor.parseDuration('01:30')).toBe('01:30');
+      expect(SpreadsheetProcessor.parseDuration('01:30:00')).toBe('01:30');
+      expect(SpreadsheetProcessor.parseDuration('02:00')).toBe('02:00');
+    });
+
+    test('parses a bare number as minutes', () => {
+      expect(SpreadsheetProcessor.parseDuration('90')).toBe('01:30');
+      expect(SpreadsheetProcessor.parseDuration('60')).toBe('01:00');
+      expect(SpreadsheetProcessor.parseDuration('45')).toBe('00:45');
+    });
+
+    test('returns undefined for values it cannot understand', () => {
+      expect(SpreadsheetProcessor.parseDuration('')).toBeUndefined();
+      expect(SpreadsheetProcessor.parseDuration('an hour')).toBeUndefined();
+      expect(SpreadsheetProcessor.parseDuration('1:75')).toBeUndefined();
+      expect(SpreadsheetProcessor.parseDuration('0')).toBeUndefined();
+      expect(SpreadsheetProcessor.parseDuration('2000')).toBeUndefined();
+    });
+  });
+
+  describe('parseVenueType', () => {
+    test('parses numeric and named venue types', () => {
+      expect(SpreadsheetProcessor.parseVenueType('1')).toBe(1);
+      expect(SpreadsheetProcessor.parseVenueType('In-Person')).toBe(1);
+      expect(SpreadsheetProcessor.parseVenueType('2')).toBe(2);
+      expect(SpreadsheetProcessor.parseVenueType('VIRTUAL')).toBe(2);
+      expect(SpreadsheetProcessor.parseVenueType('3')).toBe(3);
+      expect(SpreadsheetProcessor.parseVenueType('hybrid')).toBe(3);
+    });
+
+    test('returns undefined for unknown venue types', () => {
+      expect(SpreadsheetProcessor.parseVenueType('4')).toBeUndefined();
+      expect(SpreadsheetProcessor.parseVenueType('somewhere')).toBeUndefined();
+      expect(SpreadsheetProcessor.parseVenueType('')).toBeUndefined();
+    });
+  });
+
+  describe('parseBoolean', () => {
+    test('parses truthy and falsy spellings', () => {
+      expect(SpreadsheetProcessor.parseBoolean('TRUE')).toBe(true);
+      expect(SpreadsheetProcessor.parseBoolean('yes')).toBe(true);
+      expect(SpreadsheetProcessor.parseBoolean('1')).toBe(true);
+      expect(SpreadsheetProcessor.parseBoolean('false')).toBe(false);
+      expect(SpreadsheetProcessor.parseBoolean('N')).toBe(false);
+      expect(SpreadsheetProcessor.parseBoolean('0')).toBe(false);
+    });
+
+    test('returns undefined for unrecognized values', () => {
+      expect(SpreadsheetProcessor.parseBoolean('maybe')).toBeUndefined();
+      expect(SpreadsheetProcessor.parseBoolean('')).toBeUndefined();
+    });
+  });
 });

@@ -1,9 +1,19 @@
-import { ResponseError, type Meeting } from 'bmlt-server-client';
+import { ResponseError, type Meeting, type MeetingCreate } from 'bmlt-server-client';
 import type { NAWSRow } from './SpreadsheetProcessor';
 import { SpreadsheetProcessor } from './SpreadsheetProcessor';
 import { NAWSMapper, type MappingOptions } from './NAWSMapper';
 import { ServiceBodyCreator } from './ServiceBodyCreator';
+import { BmltSourceClient, type BmltSource, type FetchSourceOptions } from './BmltSourceClient';
+import { BmltSourceMapper, type FormatMatch, type ServiceBodyMatch } from './BmltSourceMapper';
 import RootServerApi from './ServerApi';
+
+/** One meeting ready to be created, with the label used in any message about it. */
+interface PreparedMeeting {
+  label: string;
+  worldId: string;
+  meeting: MeetingCreate | null;
+  errors: string[];
+}
 
 export interface ImportProgress {
   phase: 'processing' | 'validating' | 'mapping' | 'service-bodies' | 'creating' | 'completed' | 'error';
@@ -27,6 +37,25 @@ export interface ImportResult {
 }
 
 export type ProgressCallback = (progress: ImportProgress) => void;
+
+/** What a BMLT-to-BMLT import will do, worked out before anything is written. */
+export interface BmltSourcePreview {
+  source: BmltSource;
+  serviceBodyMatches: ServiceBodyMatch[];
+  formatMatches: FormatMatch[];
+  /** Source formats in use that the destination has no equivalent for. */
+  unmatchedFormats: FormatMatch[];
+  meetingCount: number;
+  warnings: string[];
+}
+
+export interface BmltImportOptions {
+  defaultTimeZone?: string;
+  defaultLatitude?: number;
+  defaultLongitude?: number;
+  /** Import everything unpublished no matter what the source says. */
+  forceUnpublished?: boolean;
+}
 
 export class MeetingImportService {
   private static readonly BATCH_SIZE = 5; // Process meetings in batches to avoid overwhelming the server
@@ -262,9 +291,260 @@ export class MeetingImportService {
     }
   }
 
+  /**
+   * Works out what a BMLT-to-BMLT import would do without changing anything:
+   * reads the source server and pairs its service bodies and formats with the
+   * destination's.
+   */
+  static async previewBmltSource(rootUrl: string, options: FetchSourceOptions = {}, onProgress?: (message: string) => void): Promise<BmltSourcePreview> {
+    onProgress?.('Reading source server...');
+    const source = await BmltSourceClient.fetchSource(rootUrl, options);
+
+    if (source.meetings.length === 0) {
+      throw new Error('The source server returned no meetings. Check the URL and any service body filter.');
+    }
+
+    onProgress?.('Reading destination server...');
+    const [destinationServiceBodies, destinationFormats] = await Promise.all([RootServerApi.getServiceBodies(), RootServerApi.getFormats()]);
+
+    onProgress?.('Matching service bodies and formats...');
+    const serviceBodyMatches = BmltSourceMapper.matchServiceBodies(source.serviceBodies, destinationServiceBodies, source.meetings);
+    const formatMatches = BmltSourceMapper.matchFormats(source.formats, destinationFormats);
+
+    // Only formats meetings actually use are worth reporting
+    const usedFormatIds = new Set<string>();
+    source.meetings.forEach((meeting) => {
+      (meeting.format_shared_id_list ?? '')
+        .split(',')
+        .map((id) => id.trim())
+        .filter(Boolean)
+        .forEach((id) => usedFormatIds.add(id));
+    });
+
+    const unmatchedFormats = formatMatches.filter((match) => !match.destinationId && usedFormatIds.has(String(match.source.id)) && !BmltSourceMapper.isRestrictedFormat(match.source));
+
+    const warnings: string[] = [];
+
+    const toCreate = serviceBodyMatches.filter((match) => !match.destination);
+    if (toCreate.length > 0) {
+      warnings.push(`${toCreate.length} service bodies will be created on the destination server: ${toCreate.map((match) => match.source.name).join(', ')}`);
+    }
+
+    if (unmatchedFormats.length > 0) {
+      warnings.push(`The destination has no equivalent for these formats, which will be dropped: ${unmatchedFormats.map((match) => match.source.key_string).join(', ')}`);
+    }
+
+    return {
+      source,
+      serviceBodyMatches,
+      formatMatches,
+      unmatchedFormats,
+      meetingCount: source.meetings.length,
+      warnings
+    };
+  }
+
+  /**
+   * Copies meetings from a BMLT source server onto the logged-in destination,
+   * keeping the fields the NAWS spreadsheet format cannot carry.
+   */
+  static async importFromBmltServer(preview: BmltSourcePreview, options: BmltImportOptions = {}, onProgress?: ProgressCallback, abortSignal?: AbortSignal): Promise<ImportResult> {
+    const startTime = Date.now();
+
+    const result: ImportResult = {
+      success: false,
+      totalProcessed: preview.meetingCount,
+      successfulImports: 0,
+      failedImports: 0,
+      skippedImports: 0,
+      servicesBodiesCreated: 0,
+      errors: [],
+      warnings: [...preview.warnings],
+      createdMeetings: [],
+      duration: 0
+    };
+
+    const throwIfAborted = () => {
+      if (abortSignal?.aborted) {
+        throw new DOMException('Import cancelled by user', 'AbortError');
+      }
+    };
+
+    try {
+      throwIfAborted();
+
+      // Phase 1: Service bodies, parents before children
+      onProgress?.({
+        phase: 'service-bodies',
+        currentStep: 1,
+        totalSteps: 4,
+        message: 'Matching service bodies...',
+        percentage: 5
+      });
+
+      const serviceBodies = await ServiceBodyCreator.resolveSourceServiceBodies(preview.serviceBodyMatches, (current, total, name) => {
+        onProgress?.({
+          phase: 'service-bodies',
+          currentStep: 1,
+          totalSteps: 4,
+          message: `Creating service body ${current} of ${total}: ${name}`,
+          percentage: 5 + (current / total) * 20 // 5% to 25%
+        });
+      });
+
+      result.servicesBodiesCreated = serviceBodies.created;
+      result.errors.push(...serviceBodies.errors);
+      result.warnings.push(...serviceBodies.warnings);
+
+      throwIfAborted();
+
+      // Phase 2: Map every meeting before writing anything
+      onProgress?.({
+        phase: 'mapping',
+        currentStep: 2,
+        totalSteps: 4,
+        message: 'Mapping meetings...',
+        percentage: 30
+      });
+
+      const formatIds = new Map<string, number>();
+      preview.formatMatches.forEach((match) => {
+        // Venue formats are applied by the destination server itself
+        if (match.destinationId && !BmltSourceMapper.isRestrictedFormat(match.source)) {
+          formatIds.set(String(match.source.id), match.destinationId);
+        }
+      });
+
+      const mappingOptions = {
+        serviceBodyIds: serviceBodies.idMap,
+        formatIds,
+        defaultLatitude: options.defaultLatitude ?? 0,
+        defaultLongitude: options.defaultLongitude ?? 0,
+        defaultTimeZone: options.defaultTimeZone,
+        forceUnpublished: options.forceUnpublished
+      };
+
+      const prepared: PreparedMeeting[] = preview.source.meetings.map((meeting) => {
+        const label = BmltSourceMapper.describeMeeting(meeting);
+        const mapped = BmltSourceMapper.mapMeeting(meeting, mappingOptions, label);
+        result.warnings.push(...mapped.warnings);
+
+        return {
+          label,
+          worldId: meeting.worldid_mixed?.trim() ?? '',
+          meeting: mapped.meeting,
+          errors: mapped.errors
+        };
+      });
+
+      throwIfAborted();
+
+      // Phase 3: Create
+      onProgress?.({
+        phase: 'creating',
+        currentStep: 3,
+        totalSteps: 4,
+        message: 'Checking for duplicate meetings...',
+        percentage: 35
+      });
+
+      const existingWorldIds = await this.getExistingMeetingWorldIds();
+
+      const created = await this.createPreparedMeetingsInBatches(
+        prepared,
+        existingWorldIds,
+        (current, total) => {
+          onProgress?.({
+            phase: 'creating',
+            currentStep: 3,
+            totalSteps: 4,
+            message: `Creating meeting ${current} of ${total}...`,
+            percentage: 35 + (current / total) * 60 // 35% to 95%
+          });
+        },
+        abortSignal
+      );
+
+      result.successfulImports = created.successfulCount;
+      result.failedImports = created.failed;
+      result.skippedImports = created.skipped;
+      result.errors.push(...created.errors);
+      result.createdMeetings = created.successful;
+
+      // Phase 4: Complete
+      onProgress?.({
+        phase: 'completed',
+        currentStep: 4,
+        totalSteps: 4,
+        message: `Import completed: ${result.successfulImports} meetings created, ${result.failedImports} failed, ${result.skippedImports} skipped`,
+        percentage: 100
+      });
+
+      result.success = result.successfulImports > 0;
+      result.duration = Date.now() - startTime;
+
+      return result;
+    } catch (error) {
+      result.duration = Date.now() - startTime;
+
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        result.errors.push('Import cancelled by user');
+        onProgress?.({
+          phase: 'error',
+          currentStep: 0,
+          totalSteps: 4,
+          message: 'Import cancelled',
+          percentage: 0
+        });
+      } else {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+        result.errors.push(errorMessage);
+        onProgress?.({
+          phase: 'error',
+          currentStep: 0,
+          totalSteps: 4,
+          message: `Import failed: ${errorMessage}`,
+          percentage: 0
+        });
+      }
+
+      return result;
+    }
+  }
+
   private static async createMeetingsInBatches(
     nawsRows: NAWSRow[],
     mapper: NAWSMapper,
+    existingWorldIds: Set<string>,
+    onBatchProgress?: (current: number, total: number) => void,
+    abortSignal?: AbortSignal
+  ): Promise<{
+    successful: Meeting[];
+    successfulCount: number;
+    failed: number;
+    skipped: number;
+    errors: string[];
+  }> {
+    const validRows = nawsRows.filter((row) => row.delete?.toUpperCase() !== 'D' && row.committeename?.trim() && row.arearegion?.trim() && row.day?.trim() && row.time?.trim());
+
+    const prepared: PreparedMeeting[] = validRows.map((row, index) => {
+      const rowIndex = index + 2; // Account for header row + 1-based indexing
+      const label = `Row ${rowIndex}`;
+      const mappingResult = mapper.mapNAWSRowToMeeting(row, rowIndex);
+
+      return {
+        label,
+        worldId: row.committee?.trim() ?? '',
+        meeting: mappingResult.meeting,
+        errors: mappingResult.errors
+      };
+    });
+
+    return this.createPreparedMeetingsInBatches(prepared, existingWorldIds, onBatchProgress, abortSignal);
+  }
+
+  private static async createPreparedMeetingsInBatches(
+    prepared: PreparedMeeting[],
     existingWorldIds: Set<string>,
     onBatchProgress?: (current: number, total: number) => void,
     abortSignal?: AbortSignal
@@ -288,44 +568,38 @@ export class MeetingImportService {
     let successfulCount = 0; // Track actual success count separately
 
     let processedCount = 0;
-    const validRows = nawsRows.filter((row) => row.delete?.toUpperCase() !== 'D' && row.committeename?.trim() && row.arearegion?.trim() && row.day?.trim() && row.time?.trim());
 
     // Process in batches
-    for (let i = 0; i < validRows.length; i += this.BATCH_SIZE) {
+    for (let i = 0; i < prepared.length; i += this.BATCH_SIZE) {
       // Check for cancellation before each batch
       if (abortSignal?.aborted) {
         throw new DOMException('Import cancelled by user', 'AbortError');
       }
 
-      const batch = validRows.slice(i, i + this.BATCH_SIZE);
+      const batch = prepared.slice(i, i + this.BATCH_SIZE);
 
       // Process batch concurrently
-      const batchPromises = batch.map(async (row, batchIndex) => {
-        const rowIndex = i + batchIndex + 2; // Account for header row + 1-based indexing
-
+      const batchPromises = batch.map(async (item) => {
         try {
           // First check if this worldId already exists
-          const worldId = row.committee?.trim();
-          if (worldId && existingWorldIds.has(worldId.toUpperCase())) {
+          if (item.worldId && existingWorldIds.has(item.worldId.toUpperCase())) {
             return {
               success: false,
               skipped: true,
               meeting: null,
-              errors: [`Row ${rowIndex}: Meeting with worldId '${worldId}' already exists - skipped`]
+              errors: [`${item.label}: Meeting with worldId '${item.worldId}' already exists - skipped`]
             };
           }
 
-          const mappingResult = mapper.mapNAWSRowToMeeting(row, rowIndex);
-
-          if (mappingResult.meeting) {
-            const createdMeeting = await RootServerApi.createMeeting(mappingResult.meeting);
-            return { success: true, skipped: false, meeting: createdMeeting, errors: mappingResult.errors };
+          if (item.meeting) {
+            const createdMeeting = await RootServerApi.createMeeting(item.meeting);
+            return { success: true, skipped: false, meeting: createdMeeting, errors: item.errors };
           } else {
             return {
               success: false,
               skipped: false,
               meeting: null,
-              errors: mappingResult.errors.length > 0 ? mappingResult.errors : [`Row ${rowIndex}: Failed to map meeting data`]
+              errors: item.errors.length > 0 ? item.errors : [`${item.label}: Failed to map meeting data`]
             };
           }
         } catch (error) {
@@ -350,7 +624,7 @@ export class MeetingImportService {
             success: false,
             skipped: false,
             meeting: null,
-            errors: [`Row ${rowIndex}: Failed to create meeting - ${errorMessage}`]
+            errors: [`${item.label}: Failed to create meeting - ${errorMessage}`]
           };
         }
       });
@@ -380,11 +654,11 @@ export class MeetingImportService {
           result.errors.push(...errorsToAdd);
         }
 
-        onBatchProgress?.(processedCount, validRows.length);
+        onBatchProgress?.(processedCount, prepared.length);
       });
 
       // Add delay between batches to be nice to the server
-      if (i + this.BATCH_SIZE < validRows.length) {
+      if (i + this.BATCH_SIZE < prepared.length) {
         await this.delay(this.BATCH_DELAY);
       }
     }

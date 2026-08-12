@@ -1,5 +1,9 @@
 import type { ServiceBodyCreate, ServiceBody, User } from 'bmlt-server-client';
 import RootServerApi from './ServerApi';
+import type { ServiceBodyMatch } from './BmltSourceMapper';
+import { BmltSourceMapper } from './BmltSourceMapper';
+
+const VALID_SERVICE_BODY_TYPES = new Set(['GR', 'CO', 'GS', 'LS', 'AS', 'MA', 'RS', 'ZF', 'WS']);
 
 export interface ServiceBodyCreationResult {
   serviceBody: ServiceBody;
@@ -136,6 +140,84 @@ export class ServiceBodyCreator {
     } else {
       return 'RS'; // Regional Service Committee
     }
+  }
+
+  /**
+   * Creates the service bodies a BMLT-to-BMLT import needs, parents first, so
+   * the source hierarchy is rebuilt on the destination. Returns a map from
+   * source service body id to destination id covering matched *and* newly
+   * created bodies.
+   */
+  static async resolveSourceServiceBodies(
+    matches: ServiceBodyMatch[],
+    onProgress?: (current: number, total: number, name: string) => void
+  ): Promise<{ idMap: Map<string, number>; created: number; errors: string[]; warnings: string[] }> {
+    const idMap = new Map<string, number>();
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    let created = 0;
+
+    matches.forEach((match) => {
+      if (match.destination) {
+        idMap.set(String(match.source.id), match.destination.id);
+      }
+    });
+
+    const toCreate = BmltSourceMapper.orderForCreation(matches);
+    if (toCreate.length === 0) {
+      return { idMap, created, errors, warnings };
+    }
+
+    let adminUser: User;
+    try {
+      const currentUserId = RootServerApi.token?.userId;
+      if (!currentUserId) {
+        throw new Error('No current user found - please ensure you are logged in');
+      }
+      adminUser = await RootServerApi.getUser(currentUserId);
+    } catch (error) {
+      errors.push(`Failed to get current user for service body admin: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      return { idMap, created, errors, warnings };
+    }
+
+    for (let i = 0; i < toCreate.length; i++) {
+      const match = toCreate[i];
+      const sourceId = String(match.source.id);
+      const name = match.source.name?.trim() || `Service body ${sourceId}`;
+
+      onProgress?.(i + 1, toCreate.length, name);
+
+      // Only reachable if the parent itself failed to be created
+      const sourceParentId = match.source.parent_id?.trim();
+      const parentId = sourceParentId && sourceParentId !== '0' ? (idMap.get(sourceParentId) ?? null) : null;
+      if (sourceParentId && sourceParentId !== '0' && parentId === null) {
+        warnings.push(`Service body '${name}' was created at the top level because its parent could not be resolved`);
+      }
+
+      const type = match.source.type?.trim().toUpperCase() ?? '';
+
+      try {
+        const serviceBody = await RootServerApi.createServiceBody({
+          parentId,
+          name,
+          description: match.source.description?.trim() || name,
+          type: VALID_SERVICE_BODY_TYPES.has(type) ? type : 'AS',
+          adminUserId: adminUser.id,
+          assignedUserIds: [adminUser.id],
+          worldId: match.source.world_id?.trim() || '',
+          email: '',
+          helpline: match.source.helpline?.trim() || '',
+          url: match.source.url?.trim() || ''
+        });
+
+        idMap.set(sourceId, serviceBody.id);
+        created++;
+      } catch (error) {
+        errors.push(`Failed to create service body '${name}': ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
+    }
+
+    return { idMap, created, errors, warnings };
   }
 
   static extractUniqueAreas(nawsRows: { parentname?: string; arearegion?: string; delete?: string }[]): { worldId: string; name: string }[] {

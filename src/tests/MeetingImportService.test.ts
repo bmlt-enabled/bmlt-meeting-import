@@ -31,11 +31,75 @@ vi.mock('../stores/errorModal', () => ({
 }));
 
 import { MeetingImportService } from '../lib/MeetingImportService';
+import { BmltSourceClient, type BmltSource } from '../lib/BmltSourceClient';
+import RootServerApi from '../lib/ServerApi';
+
+function createSource(): BmltSource {
+  return {
+    rootUrl: 'https://source.example.org/main_server/',
+    meetings: [
+      {
+        id_bigint: '1',
+        service_body_bigint: '5',
+        weekday_tinyint: '2',
+        venue_type: '1',
+        start_time: '19:30:00',
+        duration_time: '01:30:00',
+        published: '1',
+        meeting_name: 'Good Start',
+        location_street: '123 Main St',
+        format_shared_id_list: '3,54,99'
+      }
+    ],
+    serviceBodies: [
+      { id: '1', parent_id: '0', name: 'Source Region', type: 'RS', world_id: '' },
+      { id: '5', parent_id: '1', name: 'Source Area', type: 'AS', world_id: '' }
+    ],
+    formats: [
+      { id: '3', key_string: 'BT', world_id: 'BT' },
+      { id: '54', key_string: 'VM', world_id: 'VM' },
+      { id: '99', key_string: 'LOCAL', world_id: '' }
+    ]
+  };
+}
 
 describe('MeetingImportService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
+
+  describe('previewBmltSource', () => {
+    test('matches service bodies and reports what will be created', async () => {
+      vi.spyOn(BmltSourceClient, 'fetchSource').mockResolvedValue(createSource());
+      vi.mocked(RootServerApi.getServiceBodies).mockResolvedValue([
+        { id: 70, name: 'Source Region', worldId: '', parentId: null, type: 'RS', adminUserId: 1, assignedUserIds: [1], description: '', email: '', helpline: '', url: '' }
+      ]);
+      vi.mocked(RootServerApi.getFormats).mockResolvedValue([{ id: 300, worldId: 'BT', type: '', translations: [{ key: 'BT', name: 'Basic Text', description: '', language: 'en' }] }]);
+
+      const preview = await MeetingImportService.previewBmltSource('https://source.example.org/main_server/');
+
+      expect(preview.meetingCount).toBe(1);
+
+      const region = preview.serviceBodyMatches.find((match) => match.source.id === '1');
+      expect(region?.destination?.id).toBe(70);
+      expect(region?.ancestorOnly).toBe(true);
+
+      const area = preview.serviceBodyMatches.find((match) => match.source.id === '5');
+      expect(area?.destination).toBeNull();
+      expect(area?.meetingCount).toBe(1);
+
+      // VM is server-managed so it is not reported as missing; LOCAL is
+      expect(preview.unmatchedFormats.map((match) => match.source.key_string)).toEqual(['LOCAL']);
+      expect(preview.warnings.some((warning) => warning.includes('Source Area'))).toBe(true);
+    });
+
+    test('refuses a source with no meetings', async () => {
+      vi.spyOn(BmltSourceClient, 'fetchSource').mockResolvedValue({ ...createSource(), meetings: [] });
+
+      await expect(MeetingImportService.previewBmltSource('https://source.example.org/main_server/')).rejects.toThrow('no meetings');
+    });
+  });
+
   describe('getSupportedFileTypes', () => {
     test('returns supported file types', () => {
       const types = MeetingImportService.getSupportedFileTypes();

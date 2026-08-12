@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "lint": "prettier --check vite.config.ts src && eslint vite.config.ts src && svelte-check --tsconfig ./tsconfig.json",
     "format": "prettier --write vite.config.ts src",
+    "export:naws": "node scripts/bmlt-to-naws.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
