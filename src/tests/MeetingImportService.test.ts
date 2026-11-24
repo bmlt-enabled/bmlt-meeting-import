@@ -72,7 +72,7 @@ describe('MeetingImportService', () => {
     test('matches service bodies and reports what will be created', async () => {
       vi.spyOn(BmltSourceClient, 'fetchSource').mockResolvedValue(createSource());
       vi.mocked(RootServerApi.getServiceBodies).mockResolvedValue([
-        { id: 70, name: 'Source Region', worldId: '', parentId: null, type: 'RS', adminUserId: 1, assignedUserIds: [1], description: '', email: '', helpline: '', url: '' }
+        { id: 70, name: 'Source Region', worldId: '', parentId: null, type: 'RS', adminUserId: 1, assignedUserIds: [1], description: '', email: '', helpline: '', url: '', meetingUpdateUrl: null }
       ]);
       vi.mocked(RootServerApi.getFormats).mockResolvedValue([{ id: 300, worldId: 'BT', type: '', translations: [{ key: 'BT', name: 'Basic Text', description: '', language: 'en' }] }]);
 

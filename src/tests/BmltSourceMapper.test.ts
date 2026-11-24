@@ -27,6 +27,7 @@ function destinationBody(overrides: Partial<ServiceBody>): ServiceBody {
     email: '',
     helpline: '',
     url: '',
+    meetingUpdateUrl: null,
     ...overrides
   };
 }

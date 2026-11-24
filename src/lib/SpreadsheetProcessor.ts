@@ -47,7 +47,6 @@ export interface ProcessedSpreadsheet {
 export class SpreadsheetProcessor {
   private static readonly EXPECTED_COLUMNS = [
     'delete',
-    'parentname',
     'committee',
     'committeename',
     'arearegion',
@@ -77,9 +76,11 @@ export class SpreadsheetProcessor {
     'timezone'
   ];
 
-  // Not part of the NAWS export format. When a spreadsheet supplies them they
-  // override the per-import defaults; when absent nothing changes.
-  private static readonly OPTIONAL_COLUMNS = ['duration', 'venuetype', 'published'];
+  // parentname is only used to name service bodies that need creating, so a
+  // sheet without it still imports. duration/venuetype/published are not part
+  // of the NAWS export format: when supplied they override the per-import
+  // defaults; when absent nothing changes.
+  private static readonly OPTIONAL_COLUMNS = ['parentname', 'duration', 'venuetype', 'published'];
 
   private static readonly REQUIRED_COLUMNS = ['committeename', 'arearegion', 'day', 'time'];
 
@@ -89,10 +90,10 @@ export class SpreadsheetProcessor {
       const buffer = await file.arrayBuffer();
 
       onProgress?.('Parsing spreadsheet...');
-      let workbook = XLSX.read(buffer, {
-        type: 'array',
-        dense: true
-      });
+      // Text files are decoded here instead of by SheetJS, which reads a CSV
+      // without a BOM as Latin-1. raw keeps every cell as the literal text, so
+      // 01:30 stays 01:30, FALSE stays FALSE and 0900 keeps its leading zero.
+      let workbook = this.isTextFile(file) ? XLSX.read(this.decodeText(buffer), { type: 'string', raw: true, dense: true }) : XLSX.read(buffer, { type: 'array', dense: true });
 
       onProgress?.('Processing data...');
       const worksheet = workbook.Sheets[workbook.SheetNames[0]];
@@ -104,6 +105,19 @@ export class SpreadsheetProcessor {
       return this.validateAndProcess(rawData);
     } catch (error) {
       throw new Error(`Error processing spreadsheet: ${error instanceof Error ? error.message : 'Unknown error'}`, { cause: error });
+    }
+  }
+
+  private static isTextFile(file: File): boolean {
+    return /\.(csv|tsv|txt)$/i.test(file.name) || file.type.startsWith('text/');
+  }
+
+  /** UTF-8 (BOM optional), falling back to Windows-1252 for bytes that aren't valid UTF-8. */
+  private static decodeText(buffer: ArrayBuffer): string {
+    try {
+      return new TextDecoder('utf-8', { fatal: true }).decode(buffer);
+    } catch {
+      return new TextDecoder('windows-1252').decode(buffer);
     }
   }
 
@@ -169,7 +183,8 @@ export class SpreadsheetProcessor {
         const colIndex = columnMap[colName];
         if (colIndex !== undefined && colIndex < row.length) {
           const cellValue = row[colIndex];
-          nawsRow[colName] = cellValue ? cellValue.toString().trim() : '';
+          // Not a truthiness check: boolean false and 0 are real values.
+          nawsRow[colName] = cellValue === undefined || cellValue === null ? '' : String(cellValue).trim();
         } else {
           nawsRow[colName] = '';
         }
@@ -241,28 +256,7 @@ export class SpreadsheetProcessor {
   }
 
   private static isValidTime(time: string): boolean {
-    // Handle formats like "1930", "7:30", "730", etc.
-    const timeStr = time.toString().replace(/[^0-9:]/g, '');
-
-    // Try parsing as HHMM format (like 1930)
-    if (timeStr.length === 3 || timeStr.length === 4) {
-      const num = parseInt(timeStr);
-      const hours = Math.floor(num / 100);
-      const minutes = num % 100;
-      return hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59;
-    }
-
-    // Try parsing as HH:MM format
-    if (timeStr.includes(':')) {
-      const parts = timeStr.split(':');
-      if (parts.length === 2) {
-        const hours = parseInt(parts[0]);
-        const minutes = parseInt(parts[1]);
-        return hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59;
-      }
-    }
-
-    return false;
+    return this.parseTime(time) !== undefined;
   }
 
   private static isValidCoordinate(coord: string, min: number, max: number): boolean {
@@ -271,31 +265,64 @@ export class SpreadsheetProcessor {
   }
 
   static formatTimeForBMLT(time: string): string {
-    const timeStr = time.toString().replace(/[^0-9:]/g, '');
-
-    // Handle HHMM format
-    if (timeStr.length === 3 || timeStr.length === 4) {
-      const num = parseInt(timeStr);
-      const hours = Math.floor(num / 100);
-      const minutes = num % 100;
-      return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
-    }
-
-    // Handle H:MM or HH:MM format
-    if (timeStr.includes(':')) {
-      const parts = timeStr.split(':');
-      if (parts.length === 2) {
-        const hours = parseInt(parts[0]);
-        const minutes = parseInt(parts[1]);
-        return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
-      }
-    }
-
-    return '12:00'; // Default fallback
+    return this.parseTime(time) ?? '12:00'; // Default fallback
   }
 
   /**
-   * Accepts 'HH:MM', 'HH:MM:SS', or a whole number of minutes ('90').
+   * Accepts 'HH:MM' / 'H:MM' (optionally with seconds or am/pm), 'HHMM' / 'HMM',
+   * or a fraction of a day ('0.8125'), which is how an Excel time cell arrives.
+   * Returns 'HH:MM', or undefined when the value can't be understood.
+   */
+  private static parseTime(time: string): string | undefined {
+    const value = time.toString().trim();
+
+    let hours: number;
+    let minutes: number;
+
+    const fraction = this.dayFractionToMinutes(value);
+    if (fraction !== undefined) {
+      hours = Math.floor(fraction / 60);
+      minutes = fraction % 60;
+    } else {
+      // Drop anything but digits and colons (e.g. a trailing 'pm' is ignored).
+      const timeStr = value.replace(/[^0-9:]/g, '');
+
+      // The colon check must come first: '7:30' is four characters long and
+      // would otherwise be read as HHMM.
+      const clockMatch = timeStr.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+      if (clockMatch) {
+        hours = parseInt(clockMatch[1], 10);
+        minutes = parseInt(clockMatch[2], 10);
+      } else if (/^\d{3,4}$/.test(timeStr)) {
+        const num = parseInt(timeStr, 10);
+        hours = Math.floor(num / 100);
+        minutes = num % 100;
+      } else {
+        return undefined;
+      }
+    }
+
+    if (hours > 23 || minutes > 59) {
+      return undefined;
+    }
+
+    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+  }
+
+  /** '0.0625' -> 90. Undefined unless the value is a fraction of a day below 1. */
+  private static dayFractionToMinutes(value: string): number | undefined {
+    if (!/^0?\.\d+$/.test(value)) {
+      return undefined;
+    }
+
+    const minutes = Math.round(parseFloat(value) * 24 * 60);
+    // Rounding can push a value just under 1 up to a full day.
+    return minutes < 24 * 60 ? minutes : undefined;
+  }
+
+  /**
+   * Accepts 'HH:MM', 'HH:MM:SS', a whole number of minutes ('90'), or a
+   * fraction of a day ('0.0625'), which is how an Excel time cell arrives.
    * Returns 'HH:MM', or undefined when the value can't be understood.
    */
   static parseDuration(duration: string): string | undefined {
@@ -309,9 +336,15 @@ export class SpreadsheetProcessor {
       return `${clockMatch[1].padStart(2, '0')}:${clockMatch[2]}`;
     }
 
+    let minutes: number | undefined;
     if (/^\d+$/.test(value)) {
-      const minutes = parseInt(value, 10);
-      // A bare number is minutes; anything past a day is a typo, not a meeting.
+      minutes = parseInt(value, 10);
+    } else {
+      minutes = this.dayFractionToMinutes(value);
+    }
+
+    if (minutes !== undefined) {
+      // Anything past a day is a typo, not a meeting.
       if (minutes > 0 && minutes < 24 * 60) {
         return `${Math.floor(minutes / 60)
           .toString()

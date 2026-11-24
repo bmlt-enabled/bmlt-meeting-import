@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/svelte';
+import { render, screen, waitFor } from '@testing-library/svelte';
 import MeetingImport from '../components/MeetingImport.svelte';
 
 // Mock the stores
@@ -55,6 +55,8 @@ vi.mock('../lib/MeetingImportService', () => ({
 describe('MeetingImport', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // The login form on the page loads the server list
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve([]) });
   });
 
   test('renders the Import Meetings heading', () => {
@@ -63,22 +65,27 @@ describe('MeetingImport', () => {
     expect(screen.getByRole('heading', { name: /import meetings/i })).toBeInTheDocument();
   });
 
-  test('renders login button when not logged in', () => {
+  test('shows the login form on the page when not logged in', async () => {
     render(MeetingImport);
 
-    expect(screen.getByRole('button', { name: /login to server/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/username/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/password/i)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText(/your bmlt server/i)).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /log in/i })).toBeInTheDocument();
   });
 
-  test('displays server URL', () => {
+  test('explains what the tool does when not logged in', () => {
     render(MeetingImport);
 
-    expect(screen.getByText(/server:/i)).toBeInTheDocument();
+    expect(screen.getByText(/copy meetings into your bmlt root server/i)).toBeInTheDocument();
   });
 
-  test('shows helper text when not logged in', () => {
+  test('does not show a connected server or import controls when not logged in', () => {
     render(MeetingImport);
 
-    expect(screen.getByText(/please log in to import meetings/i)).toBeInTheDocument();
+    expect(screen.queryByText(/connected to/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /spreadsheet/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/select a valid naws export file/i)).not.toBeInTheDocument();
   });
 });
 
