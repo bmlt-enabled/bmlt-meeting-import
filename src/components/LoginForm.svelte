@@ -28,8 +28,9 @@
   let selectedServer = $state<Server | undefined>(undefined);
   let isLoadingServers = $state(false);
   let showCustomServerInput = $state(false);
-  const defaultRootServerURL = 'https://latest.aws.bmlt.app/main_server/';
-  let rootServerURL: string = $state(defaultRootServerURL);
+  // No default: the user picks the server they're importing into. A server
+  // they chose on an earlier visit is preselected.
+  let rootServerURL: string = $state(withTrailingSlash(RootServerApi.currentServerUrl ?? ''));
   let serverError: string = $state('');
   let customURL: string = $state('');
 
@@ -40,6 +41,9 @@
     },
     onSubmit: async (values) => {
       spinner.show();
+      // Applied here rather than on every change, so typing a custom URL
+      // doesn't switch servers keystroke by keystroke.
+      RootServerApi.updateServerUrl(rootServerURL);
       await apiCredentials.login(values.username, values.password);
     },
     onSuccess: () => {
@@ -82,13 +86,13 @@
       }
       servers = await response.json();
       servers.sort((a, b) => a.name.localeCompare(b.name));
-      // Set initial server if defaultRootServerURL matches any server
-      selectedServer = servers.find((s) => s.rootURL === defaultRootServerURL);
-      if (selectedServer) {
-        await updateRootServerURL(selectedServer.rootURL);
-      } else {
-        // Set default server URL if no match found
-        await updateRootServerURL(defaultRootServerURL);
+      if (rootServerURL) {
+        selectedServer = servers.find((s) => withTrailingSlash(s.rootURL) === rootServerURL);
+        if (!selectedServer) {
+          // A server typed in by hand last time
+          showCustomServerInput = true;
+          customURL = rootServerURL;
+        }
       }
     } catch (error) {
       // console.error('Failed to fetch server list -- ' + error);
@@ -98,15 +102,14 @@
     }
   }
 
-  async function updateRootServerURL(url: string) {
+  // rootServerURL should always end in a '/', unless it's the empty string
+  function withTrailingSlash(url: string): string {
     const s = url.trim();
-    // rootServerURL should always end in a '/', unless it's the empty string
-    rootServerURL = s === '' || s.endsWith('/') ? s : s + '/';
+    return s === '' || s.endsWith('/') ? s : s + '/';
+  }
 
-    // Update the API client with the new server URL
-    if (rootServerURL) {
-      RootServerApi.updateServerUrl(rootServerURL);
-    }
+  function updateRootServerURL(url: string) {
+    rootServerURL = withTrailingSlash(url);
   }
 
   function handleServerSelect(event: Event) {
@@ -129,65 +132,65 @@
   onMount(initialize);
 </script>
 
-<div class="flex flex-col space-y-6">
-  <div class="w-full rounded-lg bg-white shadow sm:max-w-md md:mt-0 xl:p-0 dark:border dark:border-gray-700 dark:bg-gray-800">
-    <div class="m-8">
-      <form use:form>
-        <div class="space-y-2">
-          <Label for="rootServerURL" class="font-medium text-gray-700 dark:text-gray-300">Root Server URL:</Label>
-          <div class="flex gap-2">
-            {#if isLoadingServers}
-              <div class="flex-1 p-2 text-gray-500 dark:text-gray-400">Loading Servers ....</div>
-            {:else}
-              <Select
-                id="rootServerURL"
-                class="flex-1"
-                items={[...servers.map((s) => ({ value: s.id, name: s.name })), { value: 'other', name: 'other' }]}
-                value={selectedServer?.id || (showCustomServerInput ? 'other' : '')}
-                onchange={handleServerSelect}
-              />
-            {/if}
-          </div>
-          {#if showCustomServerInput}
-            <input
-              type="text"
-              class="mt-2 block w-full rounded-lg border border-gray-300 bg-gray-50 p-2.5 text-sm text-gray-900 focus:border-blue-500 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400 dark:focus:border-blue-500 dark:focus:ring-blue-500"
-              placeholder="url here"
-              bind:value={customURL}
-            />
-            <Button onclick={() => updateRootServerURL(customURL)}>Update URL</Button>
-          {/if}
-          {#if serverError}
-            <Helper class="text-red-500 dark:text-red-400">{serverError}</Helper>
-          {/if}
-        </div>
-        <div class="mb-4">
-          <Label for="username" class="mb-2">Username</Label>
-          <Input type="text" name="username" id="username" onInput={() => (errorMessage = '')} />
-          <Helper class="mt-2" color="red">
-            {#if $errors.username}
-              {$errors.username}
-            {/if}
-          </Helper>
-        </div>
-        <div class="mb-4">
-          <Label for="password" class="mb-2">Password</Label>
-          <Input type="password" name="password" id="password" onInput={() => (errorMessage = '')} />
-          <Helper class="mt-2" color="red">
-            {#if $errors.password}
-              {$errors.password}
-            {/if}
-          </Helper>
-        </div>
-        {#if errorMessage}
-          <div class="mb-4">
-            <P class="text-red-700 dark:text-red-500">{errorMessage}</P>
-          </div>
+<div class="text-left">
+  <form use:form class="space-y-4">
+    <div class="space-y-2">
+      <Label for="rootServerURL" class="font-medium text-gray-700 dark:text-gray-300">Your BMLT server</Label>
+      <div class="flex gap-2">
+        {#if isLoadingServers}
+          <div class="flex-1 p-2 text-gray-500 dark:text-gray-400">Loading Servers ....</div>
+        {:else}
+          <Select
+            id="rootServerURL"
+            class="flex-1"
+            placeholder="Choose your server…"
+            items={[...servers.map((s) => ({ value: s.id, name: s.name })), { value: 'other', name: 'Other (enter URL)' }]}
+            value={selectedServer?.id || (showCustomServerInput ? 'other' : '')}
+            onchange={handleServerSelect}
+          />
         {/if}
-        <div class="mb-2">
-          <Button class="w-full" type="submit" value="login">Login</Button>
-        </div>
-      </form>
+      </div>
+      {#if showCustomServerInput}
+        <Input
+          id="customServerURL"
+          type="url"
+          class="mt-2"
+          placeholder="https://bmlt.example.org/main_server/"
+          aria-label="Server URL"
+          bind:value={customURL}
+          oninput={() => updateRootServerURL(customURL)}
+        />
+      {/if}
+      <Helper class="text-gray-500 dark:text-gray-400">The BMLT root server you're importing meetings into. Log in with your admin account on that server.</Helper>
+      {#if serverError}
+        <Helper class="text-red-500 dark:text-red-400">{serverError}</Helper>
+      {/if}
     </div>
-  </div>
+    <div>
+      <Label for="username" class="mb-2">Username</Label>
+      <Input type="text" name="username" id="username" onInput={() => (errorMessage = '')} />
+      <Helper class="mt-2" color="red">
+        {#if $errors.username}
+          {$errors.username}
+        {/if}
+      </Helper>
+    </div>
+    <div>
+      <Label for="password" class="mb-2">Password</Label>
+      <Input type="password" name="password" id="password" onInput={() => (errorMessage = '')} />
+      <Helper class="mt-2" color="red">
+        {#if $errors.password}
+          {$errors.password}
+        {/if}
+      </Helper>
+    </div>
+    {#if errorMessage}
+      <div>
+        <P class="text-red-700 dark:text-red-500">{errorMessage}</P>
+      </div>
+    {/if}
+    <div>
+      <Button class="w-full" type="submit" value="login" disabled={!rootServerURL}>Log in</Button>
+    </div>
+  </form>
 </div>

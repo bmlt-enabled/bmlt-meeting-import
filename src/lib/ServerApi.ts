@@ -30,6 +30,18 @@ import {
 import { errorModal } from '../stores/errorModal';
 import { currentServerUrl } from '../stores/apiCredentials';
 
+const SERVER_URL_STORAGE_KEY = 'bmltServerUrl';
+
+// The server the user last chose, so a stored login token is checked against
+// the server that issued it. There is deliberately no default server.
+function storedServerUrl(): string {
+  try {
+    return localStorage.getItem(SERVER_URL_STORAGE_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
 class ApiClient extends RootServerApi {
   private authorizationHeader: string | null = null;
   private _token: Token | null = null;
@@ -38,7 +50,7 @@ class ApiClient extends RootServerApi {
     super();
     this.token = token;
     this.configuration = new Configuration({
-      basePath: 'https://latest.aws.bmlt.app/main_server', // TODO:
+      basePath: storedServerUrl(),
       accessToken: () => this.authorizationHeader ?? ''
     });
   }
@@ -87,6 +99,16 @@ class ApiClient extends RootServerApi {
       accessToken: () => this.authorizationHeader ?? ''
     });
 
+    try {
+      if (normalizedUrl) {
+        localStorage.setItem(SERVER_URL_STORAGE_KEY, normalizedUrl);
+      } else {
+        localStorage.removeItem(SERVER_URL_STORAGE_KEY);
+      }
+    } catch {
+      // Storage unavailable (private mode etc.): the choice just isn't remembered.
+    }
+
     // Update the reactive store
     this.updateCurrentServerUrlStore();
   }
@@ -98,10 +120,6 @@ class ApiClient extends RootServerApi {
   private updateCurrentServerUrlStore(): void {
     // Update the reactive store with the new URL
     currentServerUrl.set(this.currentServerUrl);
-  }
-
-  async getLaravelLog(): Promise<Blob> {
-    return this.getLaravelLogRaw().then((response) => response.value());
   }
 }
 

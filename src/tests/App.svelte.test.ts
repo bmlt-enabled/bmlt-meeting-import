@@ -62,6 +62,8 @@ import App from '../App.svelte';
 describe('Import Meetings', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // The login form on the page loads the server list
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve([]) });
   });
 
   test('renders Import Meetings heading', async () => {
@@ -69,8 +71,9 @@ describe('Import Meetings', () => {
     expect(screen.getByRole('heading', { name: /import meetings/i })).toBeInTheDocument();
   });
 
-  test('shows server URL display', async () => {
+  test('shows the login form on the page when logged out', async () => {
     render(App);
-    expect(screen.getByText(/server:/i)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/your bmlt server/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/username/i)).toBeInTheDocument();
   });
 });

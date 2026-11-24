@@ -1,16 +1,13 @@
 <script lang="ts">
-  import { Button, Card, Checkbox, Helper, Heading, Input, Label, Modal, P, Fileupload, Alert, Toast } from 'flowbite-svelte';
+  import { Button, Card, Checkbox, Helper, Heading, Input, Label, P, Fileupload, Alert, Toast } from 'flowbite-svelte';
 
   import { apiCredentials, authenticatedUser, isLoggedIn, currentServerUrl } from '../stores/apiCredentials';
   import LoginForm from './LoginForm.svelte';
   import { MeetingImportService, type BmltSourcePreview, type ImportProgress, type ImportResult } from '../lib/MeetingImportService';
   import { onDestroy } from 'svelte';
 
-  let formModal = $state(false);
   let isImportingMeetings = $state(false);
   let meetingImportError = $state(false);
-  let loginFailed = $state(false);
-  let loginSuccessTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Import related state
   let selectedFile: File | null = $state(null);
@@ -34,33 +31,14 @@
   let previewMessage = $state('');
   let previewError = $state('');
 
-  function onaction({ action, data }: { action: string; data: FormData }) {
-    // Check the data validity, return false to prevent dialog closing; anything else to proceed
-    if (action === 'login' && (data.get('password') as string)?.length < 4) {
-      return false;
+  async function changeServer(): Promise<void> {
+    resetImport();
+    try {
+      await apiCredentials.logout();
+    } catch (error) {
+      // Logged out locally either way; the server call failing doesn't matter here.
+      console.error('Logout failed:', error);
     }
-  }
-
-  function handleLoginSuccess() {
-    loginFailed = false;
-    // Clear any existing timer
-    if (loginSuccessTimer) {
-      clearTimeout(loginSuccessTimer);
-    }
-    // Close modal after a brief delay to show success
-    loginSuccessTimer = setTimeout(() => {
-      formModal = false;
-      loginSuccessTimer = null;
-    }, 500);
-  }
-
-  function handleLoginFailed() {
-    loginFailed = true;
-  }
-
-  function openLoginModal() {
-    loginFailed = false;
-    formModal = true;
   }
 
   async function handleFileSelect(event: Event): Promise<void> {
@@ -328,12 +306,6 @@
       importAbortController.abort();
     }
 
-    // Clear any pending timers
-    if (loginSuccessTimer) {
-      clearTimeout(loginSuccessTimer);
-      loginSuccessTimer = null;
-    }
-
     // Clear large objects
     selectedFile = null;
     fileValidation = null;
@@ -352,40 +324,21 @@
     <div class="mb-4">
       <Heading tag="h1" class="mb-4 text-2xl dark:text-white">Import Meetings</Heading>
 
-      <!-- Server URL Display -->
-      <div class="mb-4 text-center">
-        <div class="text-sm text-gray-600 dark:text-gray-400">
-          <span class="font-medium">Server:</span>
-          <span class="ml-2 font-mono text-blue-600 dark:text-blue-400">
-            {$currentServerUrl || 'Not configured'}
+      {#if $isLoggedIn}
+        <div class="mb-4 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-sm text-gray-600 dark:text-gray-400">
+          <svg class="h-4 w-4 text-green-600 dark:text-green-400" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
+            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+          </svg>
+          <span>
+            Connected to <span class="font-mono text-blue-600 dark:text-blue-400">{$currentServerUrl}</span>
+            {#if $authenticatedUser}as <span class="font-medium">{$authenticatedUser.displayName}</span>{/if}
           </span>
+          <Button size="xs" color="alternative" onclick={changeServer} disabled={isImportingMeetings}>Change</Button>
         </div>
-      </div>
-
-      <div class="mb-4 flex items-center justify-center gap-2">
-        <Button onclick={openLoginModal}>
-          {$isLoggedIn ? 'Change Server/User' : 'Login to Server'}
-        </Button>
-        {#if $isLoggedIn && $authenticatedUser}
-          <div class="flex items-center text-green-600 dark:text-green-400">
-            <svg class="mr-1 h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
-              <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
-            </svg>
-            <span class="text-sm">Logged in as {$authenticatedUser.displayName}</span>
-          </div>
-        {:else if loginFailed}
-          <div class="flex items-center text-red-600 dark:text-red-400">
-            <svg class="mr-1 h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
-              <path
-                fill-rule="evenodd"
-                d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z"
-                clip-rule="evenodd"
-              />
-            </svg>
-            <span class="text-sm">Login failed</span>
-          </div>
-        {/if}
-      </div>
+      {:else}
+        <P class="mb-6 text-sm text-gray-600 dark:text-gray-400">Copy meetings into your BMLT root server from a NAWS export spreadsheet or from another BMLT server.</P>
+        <LoginForm {apiCredentials} />
+      {/if}
 
       <!-- Import Source -->
       {#if $isLoggedIn}
@@ -560,7 +513,7 @@
         {:else if showImportResults}
           <Button onclick={resetImport} color="alternative" class="w-full">Start Another Import</Button>
         {:else if !$isLoggedIn}
-          <Helper class="text-center text-gray-500 dark:text-gray-400">Please log in to import meetings</Helper>
+          <!-- Nothing to act on until logged in: the login form above is the next step. -->
         {:else if importSource === 'server'}
           {#if sourcePreview}
             <Button onclick={importMeetingsFromServer} color="primary" class="w-full">
@@ -574,13 +527,15 @@
             Import {fileValidation.preview.validRows} Meetings
           </Button>
         {:else}
-          <Helper class="text-center text-gray-500 dark:text-gray-400"
-            >Select a valid NAWS export file to begin import (<a
+          <Helper class="text-center text-gray-500 dark:text-gray-400">
+            Select a valid NAWS export file to begin import (<a
               href="/BMLT_Export_Example.xlsx"
               download
-              class="text-primary-600 hover:text-primary-800 dark:text-primary-400 dark:hover:text-primary-300 underline">download example</a
-            >)</Helper
-          >
+              class="text-primary-600 hover:text-primary-800 dark:text-primary-400 dark:hover:text-primary-300 underline"
+            >
+              download example
+            </a>)
+          </Helper>
         {/if}
       </div>
 
@@ -669,10 +624,6 @@
     </div>
   </div>
 </Card>
-
-<Modal form bind:open={formModal} size="xs" {onaction}>
-  <LoginForm {apiCredentials} authenticated={handleLoginSuccess} loginFailed={handleLoginFailed} />
-</Modal>
 
 <Toast color="yellow" position="bottom-right">
   {#snippet icon()}

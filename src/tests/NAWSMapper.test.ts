@@ -5,8 +5,8 @@ import type { ServiceBody, Format } from 'bmlt-server-client';
 
 function createMockServiceBodies(): ServiceBody[] {
   return [
-    { id: 1, name: 'Test Area', worldId: 'AR12345', parentId: null, type: 'AS', adminUserId: 1, assignedUserIds: [1], description: '', email: '', helpline: '', url: '' },
-    { id: 2, name: 'Test Region', worldId: 'RG67890', parentId: null, type: 'RS', adminUserId: 1, assignedUserIds: [1], description: '', email: '', helpline: '', url: '' }
+    { id: 1, name: 'Test Area', worldId: 'AR12345', parentId: null, type: 'AS', adminUserId: 1, assignedUserIds: [1], description: '', email: '', helpline: '', url: '', meetingUpdateUrl: null },
+    { id: 2, name: 'Test Region', worldId: 'RG67890', parentId: null, type: 'RS', adminUserId: 1, assignedUserIds: [1], description: '', email: '', helpline: '', url: '', meetingUpdateUrl: null }
   ];
 }
 

@@ -157,7 +157,7 @@ describe('NAWSExporter', () => {
       const processed = await SpreadsheetProcessor.processFile(file);
 
       const serviceBodies: ServiceBody[] = [
-        { id: 10, name: 'Test Area', worldId: 'ARSB5', parentId: null, type: 'AS', adminUserId: 1, assignedUserIds: [1], description: '', email: '', helpline: '', url: '' }
+        { id: 10, name: 'Test Area', worldId: 'ARSB5', parentId: null, type: 'AS', adminUserId: 1, assignedUserIds: [1], description: '', email: '', helpline: '', url: '', meetingUpdateUrl: null }
       ];
       const formats: Format[] = [
         { id: 1, worldId: 'OPEN', type: '', translations: [{ key: 'O', name: 'Open', description: '', language: 'en' }] },
